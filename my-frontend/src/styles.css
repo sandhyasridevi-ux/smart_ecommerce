@@ -1,0 +1,57 @@
+body {
+}
+
+.btn {
+  width: 100%;
+  padding: 14px;
+  border: none;
+  border-radius: 10px;
+  font-size: 16px;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: 0.2s;
+}
+
+.btn-primary {
+  background: linear-gradient(90deg, #4f46e5, #6366f1);
+  color: white;
+}
+
+.btn-primary:hover {
+  opacity: 0.95;
+}
+
+.btn-google {
+  background: #ea4335;
+  color: white;
+}
+
+.btn-facebook {
+  background: #1877f2;
+  color: white;
+}
+
+.btn-auth0 {
+  background: #111827;
+  color: white;
+}
+
+.row-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.row-buttons .btn {
+  width: 140px;
+}
+
+.message {
+  margin-top: 12px;
+  color: green;
+}
+
+.error {
+  margin-top: 12px;
+  color: red;
+}
