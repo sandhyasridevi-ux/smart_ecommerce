@@ -60,14 +60,19 @@ export default function AdminPanel() {
     stock: "",
     image: "",
     popularity: "0",
-  });
+  }); 
   const [exporting, setExporting] = useState("");
+  const [accessChecked, setAccessChecked] = useState(false);
 
   const fetchUsers = async () => {
     try {
       const res = await API.get("/auth/admin/users");
       setUsers(Array.isArray(res.data) ? res.data : []);
     } catch (error) {
+      if (error?.response?.status === 403) {
+        setMessage("Admin access denied for this account.");
+        return;
+      }
       setMessage(error?.response?.data?.detail || "Unable to fetch users.");
     }
   };
@@ -77,6 +82,10 @@ export default function AdminPanel() {
       const res = await API.get("/checkout/orders/all");
       setOrders(Array.isArray(res.data) ? res.data : []);
     } catch (error) {
+      if (error?.response?.status === 403) {
+        setMessage("Admin access denied for this account.");
+        return;
+      }
       setMessage(error?.response?.data?.detail || "Unable to fetch admin orders.");
     }
   };
@@ -91,54 +100,77 @@ export default function AdminPanel() {
   };
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (!token || !currentUser || currentUser.role !== "admin") {
-      return;
-    }
-    if (token.startsWith("local-token-")) {
-      setMessage("Session expired for backend admin APIs. Please logout and login again.");
-      return;
-    }
+    let ws;
+    let pollTimer;
 
-    fetchUsers();
-    fetchOrders();
-    fetchProducts();
+    const bootstrapAdmin = async () => {
+      const token = localStorage.getItem("token");
+      if (!token || !currentUser || currentUser.role !== "admin") {
+        setAccessChecked(true);
+        return;
+      }
+      if (token.startsWith("local-token-")) {
+        setMessage("Session expired for backend admin APIs. Please logout and login again.");
+        setAccessChecked(true);
+        return;
+      }
 
-    const pollTimer = window.setInterval(() => {
+      try {
+        const me = await API.get("/auth/me");
+        if (me?.data?.role !== "admin") {
+          setMessage("This token does not have admin access.");
+          setAccessChecked(true);
+          return;
+        }
+      } catch (error) {
+        setMessage(error?.response?.data?.detail || "Unable to verify admin access.");
+        setAccessChecked(true);
+        return;
+      }
+
+      setAccessChecked(true);
       fetchUsers();
       fetchOrders();
       fetchProducts();
-    }, 20000);
 
-    const ws = new WebSocket(buildNotificationsWsUrl(token));
-    ws.onmessage = (event) => {
-      try {
-        const parsed = JSON.parse(event.data || "{}");
-        if (
-          parsed?.event === "admin:new_order" ||
-          parsed?.event === "admin:order_status" ||
-          parsed?.event === "admin:new_user" ||
-          parsed?.event === "product:created" ||
-          parsed?.event === "product:updated" ||
-          parsed?.event === "product:deleted" ||
-          parsed?.event === "product:image_updated" ||
-          parsed?.event === "stock:updated"
-        ) {
-          fetchUsers();
-          fetchOrders();
-          fetchProducts();
+      pollTimer = window.setInterval(() => {
+        fetchUsers();
+        fetchOrders();
+        fetchProducts();
+      }, 20000);
+
+      ws = new WebSocket(buildNotificationsWsUrl(token));
+      ws.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data || "{}");
+          if (
+            parsed?.event === "admin:new_order" ||
+            parsed?.event === "admin:order_status" ||
+            parsed?.event === "admin:new_user" ||
+            parsed?.event === "product:created" ||
+            parsed?.event === "product:updated" ||
+            parsed?.event === "product:deleted" ||
+            parsed?.event === "product:image_updated" ||
+            parsed?.event === "stock:updated"
+          ) {
+            fetchUsers();
+            fetchOrders();
+            fetchProducts();
+          }
+        } catch (err) {
+          // ignore malformed socket payloads
         }
-      } catch (err) {
-        // ignore malformed socket payloads
-      }
+      };
+      ws.onerror = () => {
+        setMessage((current) => current || "Admin live updates are unavailable.");
+      };
     };
-    ws.onerror = () => {
-      setMessage((current) => current || "Admin live updates are unavailable.");
-    };
+
+    bootstrapAdmin();
 
     return () => {
-      window.clearInterval(pollTimer);
-      ws.close();
+      if (pollTimer) window.clearInterval(pollTimer);
+      if (ws) ws.close();
     };
   }, [currentUser?.role]);
 
@@ -672,6 +704,17 @@ export default function AdminPanel() {
     );
   }
 
+  if (!accessChecked) {
+    return (
+      <div style={styles.page}>
+        <div style={styles.card}>
+          <h1 style={styles.title}>Checking Admin Access</h1>
+          <p style={styles.text}>Validating backend permissions for this account.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={styles.page}>
       <div style={styles.wrapper}>
@@ -759,7 +802,7 @@ export default function AdminPanel() {
         <div style={styles.metrics}>
           <div style={styles.metricCard}>
             <span style={styles.metricLabel}>Users</span>
-            <strong style={styles.metricValue}>{users.length}</strong>
+            <strong style={styles.metricValue}>{users.length}</strong>bn
           </div>
           <div style={styles.metricCard}>
             <span style={styles.metricLabel}>Wishlist Items</span>

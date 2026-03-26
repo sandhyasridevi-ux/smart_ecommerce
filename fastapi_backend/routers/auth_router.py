@@ -127,6 +127,12 @@ def token_login(
 
 @router.post("/refresh", response_model=TokenResponse)
 def refresh_token(payload: RefreshTokenRequest, db: Session = Depends(get_db)):
+    if payload.refresh_token.strip() == "refresh_token":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Use the real refresh_token returned by /auth/login or /auth/register",
+        )
+
     decoded = decode_token(payload.refresh_token)
     if decoded.get("token_type") != "refresh":
         raise HTTPException(

@@ -74,6 +74,35 @@ def ensure_schema_columns():
                 connection.execute(
                     text("UPDATE orders SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL")
                 )
+            if "delivered_at" not in order_columns:
+                connection.execute(
+                    text("ALTER TABLE orders ADD COLUMN delivered_at DATETIME")
+                )
+            connection.execute(
+                text(
+                    "UPDATE orders SET delivered_at = created_at "
+                    "WHERE order_status = 'delivered' AND delivered_at IS NULL AND created_at IS NOT NULL"
+                )
+            )
+            if "return_requested_at" not in order_columns:
+                connection.execute(
+                    text("ALTER TABLE orders ADD COLUMN return_requested_at DATETIME")
+                )
+            if "return_status" not in order_columns:
+                connection.execute(
+                    text("ALTER TABLE orders ADD COLUMN return_status VARCHAR DEFAULT 'not_requested'")
+                )
+                connection.execute(
+                    text("UPDATE orders SET return_status = 'not_requested' WHERE return_status IS NULL")
+                )
+            if "return_reason" not in order_columns:
+                connection.execute(
+                    text("ALTER TABLE orders ADD COLUMN return_reason VARCHAR")
+                )
+            if "return_comment" not in order_columns:
+                connection.execute(
+                    text("ALTER TABLE orders ADD COLUMN return_comment VARCHAR")
+                )
 
     if "payments" in table_names:
         payment_columns = {column["name"] for column in inspector.get_columns("payments")}
@@ -96,6 +125,14 @@ def ensure_schema_columns():
                 )
                 connection.execute(
                     text("UPDATE payments SET timestamp = CURRENT_TIMESTAMP WHERE timestamp IS NULL")
+                )
+
+    if "return_requests" in table_names:
+        return_columns = {column["name"] for column in inspector.get_columns("return_requests")}
+        with engine.begin() as connection:
+            if "comment" not in return_columns:
+                connection.execute(
+                    text("ALTER TABLE return_requests ADD COLUMN comment VARCHAR")
                 )
 
 

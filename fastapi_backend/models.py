@@ -20,6 +20,7 @@ class User(Base):
     cart_items = relationship("CartItem", back_populates="user", cascade="all, delete")
     orders = relationship("Order", back_populates="user", cascade="all, delete")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete")
+    return_requests = relationship("ReturnRequest", back_populates="user", cascade="all, delete")
 
 
 class Product(Base):
@@ -63,10 +64,16 @@ class Order(Base):
     payment_status = Column(String, nullable=False, default="pending")
     order_status = Column(String, nullable=False, default="pending")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    delivered_at = Column(DateTime, nullable=True)
+    return_requested_at = Column(DateTime, nullable=True)
+    return_status = Column(String, nullable=False, default="not_requested")
+    return_reason = Column(String, nullable=True)
+    return_comment = Column(String, nullable=True)
 
     user = relationship("User", back_populates="orders")
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="order", cascade="all, delete-orphan")
+    return_requests = relationship("ReturnRequest", back_populates="order", cascade="all, delete-orphan")
 
 
 class OrderItem(Base):
@@ -94,6 +101,21 @@ class Payment(Base):
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     order = relationship("Order", back_populates="payments")
+
+
+class ReturnRequest(Base):
+    __tablename__ = "return_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    reason = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="pending")
+    comment = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    order = relationship("Order", back_populates="return_requests")
+    user = relationship("User", back_populates="return_requests")
 
 
 class Notification(Base):

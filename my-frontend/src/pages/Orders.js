@@ -8,6 +8,10 @@ export default function Orders() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [toast, setToast] = useState("");
+  const [submittingReturnId, setSubmittingReturnId] = useState(null);
+  const [activeReturnFormId, setActiveReturnFormId] = useState(null);
+  const [returnReason, setReturnReason] = useState("");
+  const [returnComment, setReturnComment] = useState("");
 
   const fetchOrders = async () => {
     try {
@@ -76,6 +80,7 @@ export default function Orders() {
     paid: { background: "#dcfce7", color: "#166534" },
     shipped: { background: "#dbeafe", color: "#1d4ed8" },
     delivered: { background: "#dcfce7", color: "#166534" },
+    return_requested: { background: "#fef3c7", color: "#b45309" },
     cancelled: { background: "#fee2e2", color: "#b91c1c" },
   };
   const steps = ["Pending", "Paid", "Shipped", "Delivered"];
@@ -85,10 +90,41 @@ export default function Orders() {
       paid: 1,
       shipped: 2,
       delivered: 3,
+      return_requested: 3,
       cancelled: 0,
     }),
     []
   );
+
+  const requestReturn = async (order) => {
+    const trimmedReason = returnReason.trim();
+    const trimmedComment = returnComment.trim();
+
+    if (!trimmedReason || trimmedReason.length < 5) {
+      setMessage("Return reason must be at least 5 characters.");
+      return;
+    }
+
+    try {
+      setSubmittingReturnId(order.id);
+      const res = await API.post(`/checkout/orders/${order.id}/return`, {
+        reason: trimmedReason,
+        comment: trimmedComment || null,
+      });
+      setOrders((current) =>
+        current.map((item) => (item.id === order.id ? res.data : item))
+      );
+      setActiveReturnFormId(null);
+      setReturnReason("");
+      setReturnComment("");
+      setToast(`Return request sent for order #${order.id}`);
+      window.setTimeout(() => setToast(""), 2200);
+    } catch (error) {
+      setMessage(error?.response?.data?.detail || "Unable to submit return request.");
+    } finally {
+      setSubmittingReturnId(null);
+    }
+  };
 
   return (
     <div style={styles.page}>
@@ -140,7 +176,24 @@ export default function Orders() {
                     <strong>Total</strong>
                     <span>Rs. {Number(order.total).toLocaleString("en-IN")}</span>
                   </div>
+                  <div style={styles.infoBox}>
+                    <strong>Return Status</strong>
+                    <span>{String(order.return_status || "not_requested").replaceAll("_", " ")}</span>
+                  </div>
                 </div>
+
+                {order.return_reason ? (
+                  <div style={styles.returnDetails}>
+                    <strong>Return Reason</strong>
+                    <p style={styles.returnText}>{order.return_reason}</p>
+                    {order.return_comment ? (
+                      <>
+                        <strong>Comment</strong>
+                        <p style={styles.returnText}>{order.return_comment}</p>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <div style={styles.timeline}>
                   {steps.map((step, index) => (
@@ -172,6 +225,69 @@ export default function Orders() {
                       <strong>Rs. {Number(item.price * item.quantity).toLocaleString("en-IN")}</strong>
                     </div>
                   ))}
+                </div>
+
+                <div style={styles.orderActions}>
+                  {order.can_request_return ? (
+                    activeReturnFormId === order.id ? (
+                      <div style={styles.returnForm}>
+                        <input
+                          style={styles.returnInput}
+                          placeholder="Return reason"
+                          value={returnReason}
+                          onChange={(e) => setReturnReason(e.target.value)}
+                        />
+                        <textarea
+                          style={styles.returnTextarea}
+                          placeholder="Optional comment"
+                          value={returnComment}
+                          onChange={(e) => setReturnComment(e.target.value)}
+                        />
+                        <div style={styles.returnFormActions}>
+                          <button
+                            style={styles.cancelReturnButton}
+                            onClick={() => {
+                              setActiveReturnFormId(null);
+                              setReturnReason("");
+                              setReturnComment("");
+                            }}
+                            disabled={submittingReturnId === order.id}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            style={styles.returnButton}
+                            onClick={() => requestReturn(order)}
+                            disabled={
+                              submittingReturnId === order.id ||
+                              returnReason.trim().length < 5
+                            }
+                          >
+                            {submittingReturnId === order.id ? "Submitting..." : "Submit Return"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        style={styles.returnButton}
+                        onClick={() => {
+                          setActiveReturnFormId(order.id);
+                          setReturnReason("");
+                          setReturnComment("");
+                        }}
+                      >
+                        Request Return
+                      </button>
+                    )
+                  ) : (
+                    <span style={styles.returnHint}>
+                      {order.return_status === "requested"
+                        ? "Return request already submitted"
+                        : order.order_status === "delivered"
+                          ? `Return available only within ${order.return_window_days} days of delivery`
+                          : "Return available only for delivered orders"}
+                    </span>
+                  )}
                 </div>
               </div>
             ))}
@@ -311,6 +427,73 @@ const styles = {
     color: "#334155",
     padding: "10px 0",
     borderBottom: "1px solid #f1f5f9",
+  },
+  returnDetails: {
+    marginBottom: "16px",
+    padding: "14px 16px",
+    background: "#fff7ed",
+    border: "1px solid #fed7aa",
+    borderRadius: "14px",
+    display: "grid",
+    gap: "6px",
+    color: "#9a3412",
+  },
+  returnText: {
+    margin: 0,
+    lineHeight: 1.5,
+  },
+  orderActions: {
+    marginTop: "16px",
+    display: "flex",
+    justifyContent: "flex-end",
+  },
+  returnForm: {
+    width: "100%",
+    display: "grid",
+    gap: "10px",
+    maxWidth: "420px",
+  },
+  returnInput: {
+    border: "1px solid #cbd5e1",
+    borderRadius: "12px",
+    padding: "12px 14px",
+    fontSize: "14px",
+  },
+  returnTextarea: {
+    border: "1px solid #cbd5e1",
+    borderRadius: "12px",
+    padding: "12px 14px",
+    fontSize: "14px",
+    minHeight: "90px",
+    resize: "vertical",
+    fontFamily: "inherit",
+  },
+  returnFormActions: {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: "10px",
+  },
+  returnButton: {
+    border: "none",
+    borderRadius: "12px",
+    background: "#dc2626",
+    color: "#fff",
+    padding: "12px 16px",
+    fontWeight: "800",
+    cursor: "pointer",
+  },
+  cancelReturnButton: {
+    border: "1px solid #cbd5e1",
+    borderRadius: "12px",
+    background: "#fff",
+    color: "#334155",
+    padding: "12px 16px",
+    fontWeight: "800",
+    cursor: "pointer",
+  },
+  returnHint: {
+    color: "#64748b",
+    fontWeight: "600",
   },
   notice: {
     marginTop: "16px",

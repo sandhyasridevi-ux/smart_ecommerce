@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
@@ -18,7 +18,7 @@ from ..email_templates import (
     payment_status_html,
     shipping_update_html,
 )
-from ..models import CartItem, Order, OrderItem, Payment, User
+from ..models import CartItem, Order, OrderItem, Payment, ReturnRequest, User
 from ..notification_service import (
     LOW_STOCK_THRESHOLD,
     create_notification,
@@ -30,6 +30,7 @@ from ..schemas import (
     CheckoutRequest,
     CheckoutResponse,
     OrderStatusUpdateRequest,
+    ReturnRequestCreate,
     OrderItemResponse,
     OrderResponse,
     PaymentStatusUpdateRequest,
@@ -46,6 +47,7 @@ except ImportError:  # pragma: no cover
 router = APIRouter()
 
 TAX_PERCENT = 0.0
+RETURN_WINDOW_DAYS = 7
 
 
 def _format_inr(amount: float) -> str:
@@ -53,6 +55,22 @@ def _format_inr(amount: float) -> str:
 
 
 def _serialize_order(order: Order) -> OrderResponse:
+    effective_delivered_at = order.delivered_at
+    if not effective_delivered_at and order.order_status == "delivered":
+        effective_delivered_at = order.created_at
+
+    return_deadline = (
+        effective_delivered_at + timedelta(days=RETURN_WINDOW_DAYS)
+        if effective_delivered_at
+        else None
+    )
+    can_request_return = (
+        order.order_status == "delivered"
+        and order.return_status in {"not_requested", "rejected"}
+        and return_deadline is not None
+        and datetime.utcnow() <= return_deadline
+    )
+
     items = [
         OrderItemResponse(
             id=item.id,
@@ -70,6 +88,13 @@ def _serialize_order(order: Order) -> OrderResponse:
         payment_status=order.payment_status,
         order_status=order.order_status,
         created_at=order.created_at.isoformat() if order.created_at else "",
+        delivered_at=effective_delivered_at.isoformat() if effective_delivered_at else None,
+        return_requested_at=order.return_requested_at.isoformat() if order.return_requested_at else None,
+        return_status=order.return_status or "not_requested",
+        return_reason=order.return_reason,
+        return_comment=order.return_comment,
+        can_request_return=can_request_return,
+        return_window_days=RETURN_WINDOW_DAYS,
         items=items,
     )
 
@@ -450,6 +475,8 @@ async def update_order_status(
         order.payment_status = "completed"
     if payload.order_status == "cancelled":
         order.payment_status = "failed"
+    if payload.order_status == "delivered" and not order.delivered_at:
+        order.delivered_at = datetime.utcnow()
 
     status_title_map = {
         "pending": "Order confirmed",
@@ -619,6 +646,150 @@ async def update_order_status(
         await realtime_manager.send_to_user(admin_alert["user_id"], "notification:new", admin_alert)
 
     return _serialize_order(order)
+
+
+async def _submit_return_request(
+    order_id: int,
+    payload: ReturnRequestCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    order = (
+        db.query(Order)
+        .options(joinedload(Order.items).joinedload(OrderItem.product))
+        .filter(Order.id == order_id, Order.user_id == current_user.id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order.order_status != "delivered":
+        raise HTTPException(status_code=400, detail="Return is allowed only for delivered orders")
+
+    effective_delivered_at = order.delivered_at or order.created_at
+    if not effective_delivered_at:
+        raise HTTPException(status_code=400, detail="Delivered timestamp missing for this order")
+
+    return_deadline = effective_delivered_at + timedelta(days=RETURN_WINDOW_DAYS)
+    if datetime.utcnow() > return_deadline:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Return window has expired. Returns are allowed only within {RETURN_WINDOW_DAYS} days.",
+        )
+
+    if order.return_status == "requested":
+        raise HTTPException(status_code=400, detail="Return request already submitted")
+
+    return_request = ReturnRequest(
+        order_id=order.id,
+        user_id=current_user.id,
+        reason=payload.reason.strip(),
+        comment=payload.comment.strip() if payload.comment else None,
+        status="pending",
+    )
+    db.add(return_request)
+
+    order.return_status = "requested"
+    order.order_status = "return_requested"
+    order.return_requested_at = datetime.utcnow()
+    order.return_reason = payload.reason.strip()
+    order.return_comment = payload.comment.strip() if payload.comment else None
+
+    customer_notification = create_notification(
+        db=db,
+        user_id=current_user.id,
+        title="Return request submitted",
+        message=(
+            f"Return request submitted for order #{order.id}. "
+            f"Reason: {payload.reason.strip()}."
+            + (
+                f" Comment: {payload.comment.strip()}."
+                if payload.comment and payload.comment.strip()
+                else ""
+            )
+        ),
+        notification_type="order",
+    )
+
+    admin_ids = get_admin_user_ids(db)
+    admin_notifications = []
+    for admin_id in admin_ids:
+        alert = create_notification(
+            db=db,
+            user_id=admin_id,
+            title="Return request received",
+            message=(
+                f"Order #{order.id} has a new return request from {current_user.email}. "
+                f"Reason: {payload.reason.strip()}."
+                + (
+                    f" Comment: {payload.comment.strip()}."
+                    if payload.comment and payload.comment.strip()
+                    else ""
+                )
+            ),
+            notification_type="admin_alert",
+        )
+        admin_notifications.append(serialize_notification(alert))
+
+    db.commit()
+    db.refresh(order)
+    db.refresh(return_request)
+
+    await realtime_manager.send_to_user(
+        current_user.id,
+        "notification:new",
+        serialize_notification(customer_notification),
+    )
+    await realtime_manager.send_to_user(
+        current_user.id,
+        "order:return_requested",
+        {
+            "order_id": order.id,
+            "order_status": order.order_status,
+            "return_status": order.return_status,
+            "return_request_id": return_request.id,
+        },
+    )
+    if admin_ids:
+        await realtime_manager.send_to_users(
+            admin_ids,
+            "admin:return_request",
+            {
+                "order_id": order.id,
+                "user_id": current_user.id,
+                "order_status": order.order_status,
+                "return_status": order.return_status,
+                "return_request_id": return_request.id,
+            },
+        )
+        for admin_alert in admin_notifications:
+            await realtime_manager.send_to_user(
+                admin_alert["user_id"],
+                "notification:new",
+                admin_alert,
+            )
+
+    return _serialize_order(order)
+
+
+@router.post("/orders/{order_id}/return-request", response_model=OrderResponse)
+async def request_return_legacy(
+    order_id: int,
+    payload: ReturnRequestCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return await _submit_return_request(order_id, payload, db, current_user)
+
+
+@router.post("/orders/{order_id}/return", response_model=OrderResponse)
+async def request_return(
+    order_id: int,
+    payload: ReturnRequestCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return await _submit_return_request(order_id, payload, db, current_user)
 
 
 @router.get("/orders", response_model=list[OrderResponse])

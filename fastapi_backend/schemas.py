@@ -37,6 +37,23 @@ class TokenResponse(BaseModel):
     token_type: str
     user: dict
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "access_token": "eyJhbGciOi...",
+                "refresh_token": "eyJhbGciOi...refresh",
+                "token_type": "bearer",
+                "user": {
+                    "id": 1,
+                    "name": "Sandhya",
+                    "email": "sandhya@example.com",
+                    "role": "customer",
+                    "created_at": "2026-03-26T10:30:00",
+                },
+            }
+        }
+    )
+
 
 class AccessTokenResponse(BaseModel):
     access_token: str
@@ -45,6 +62,14 @@ class AccessTokenResponse(BaseModel):
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "refresh_token": "Paste the real refresh_token value returned by /auth/login or /auth/register"
+            }
+        }
+    )
 
 
 class SocialLoginRequest(BaseModel):
@@ -182,6 +207,13 @@ class OrderResponse(BaseModel):
     payment_status: str
     order_status: str
     created_at: str
+    delivered_at: Optional[str] = None
+    return_requested_at: Optional[str] = None
+    return_status: str
+    return_reason: Optional[str] = None
+    return_comment: Optional[str] = None
+    can_request_return: bool = False
+    return_window_days: int = 7
     items: List[OrderItemResponse]
 
 
@@ -205,8 +237,23 @@ class CheckoutResponse(BaseModel):
 class OrderStatusUpdateRequest(BaseModel):
     order_status: str = Field(
         ...,
-        pattern="^(pending|paid|shipped|delivered|cancelled)$",
+        pattern="^(pending|paid|shipped|delivered|cancelled|return_requested)$",
     )
+
+
+class ReturnRequestCreate(BaseModel):
+    reason: str = Field(..., min_length=5, max_length=500)
+    comment: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ReturnRequestResponse(BaseModel):
+    id: int
+    order_id: int
+    user_id: int
+    reason: str
+    status: str
+    comment: Optional[str] = None
+    created_at: str
 
 
 class NotificationCreateRequest(BaseModel):
